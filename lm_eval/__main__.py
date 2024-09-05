@@ -265,28 +265,38 @@ def parse_eval_args(parser: argparse.ArgumentParser) -> argparse.Namespace:
     return parser.parse_args()
 
 
-def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
-    if not args:
+def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None: # args 인자는 argparse.Namespace 또는 None
+    '''
+    1. 명령행 인자 파싱
+    2. 로깅 설정
+    3. 평가 트래커 설정
+    4. few-shot 및 기타 설정 확인
+    5. 작업 로드
+    6. 모델 평가
+    7. 결과 저장 및 로깅
+    '''
+    if not args: # 명령행 인자 파싱, 없으면 setup_parser와 parse_eval_args로 파싱
         # we allow for args to be passed externally, else we parse them ourselves
         parser = setup_parser()
         args = parse_eval_args(parser)
 
     if args.wandb_args:
-        wandb_logger = WandbLogger(**simple_parse_args_string(args.wandb_args))
+        wandb_logger = WandbLogger(**simple_parse_args_string(args.wandb_args)) # 로깅 설정 초기화
 
-    eval_logger = utils.eval_logger
-    eval_logger.setLevel(getattr(logging, f"{args.verbosity}"))
-    eval_logger.info(f"Verbosity set to {args.verbosity}")
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    eval_logger = utils.eval_logger # 로깅 설정 초기화
+    eval_logger.setLevel(getattr(logging, f"{args.verbosity}")) # 로깅 레벨 설정
+    eval_logger.info(f"Verbosity set to {args.verbosity}") # 로깅 레벨 출력
+    os.environ["TOKENIZERS_PARALLELISM"] = "false" # 병렬 토크나이저 비활성화
 
-    # update the evaluation tracker args with the output path and the HF token
+    # 평가 트래커 설정 update the evaluation tracker args with the output path and the HF token
     if args.output_path:
         args.hf_hub_log_args += f",output_path={args.output_path}"
     if os.environ.get("HF_TOKEN", None):
-        args.hf_hub_log_args += f",token={os.environ.get('HF_TOKEN')}"
+        args.hf_hub_log_args += f",token={os.environ.get('HF_TOKEN')}" # 토큰 설정
     evaluation_tracker_args = simple_parse_args_string(args.hf_hub_log_args)
-    evaluation_tracker = EvaluationTracker(**evaluation_tracker_args)
+    evaluation_tracker = EvaluationTracker(**evaluation_tracker_args) # EvaluationTracker 객체 생성
 
+    # Few-shot 및 기타 설정 확인하고 필요한 경우 예외 발생
     if args.predict_only:
         args.log_samples = True
     if (args.log_samples or args.predict_only) and not args.output_path:
@@ -306,6 +316,8 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
             "If fewshot_as_multiturn is set, num_fewshot must be greater than 0."
         )
 
+    # 작업 로드 
+    # 평가할 작업 로드하고 작업 목록 확인/ 작업이 지정되지 않았거나 잘못된 작업이 지정된 경우 예외 발생 시킴
     if args.include_path is not None:
         eval_logger.info(f"Including path: {args.include_path}")
     task_manager = TaskManager(args.verbosity, include_path=args.include_path)
@@ -321,6 +333,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
             "REAL METRICS SHOULD NOT BE COMPUTED USING LIMIT."
         )
 
+    # 실제 평가할 작업 목록 확인 => task names
     if args.tasks is None:
         eval_logger.error("Need to specify task to evaluate.")
         sys.exit()
@@ -337,7 +350,7 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         print(task_manager.list_all_tasks(list_groups=False, list_tags=False))
         sys.exit()
     else:
-        if os.path.isdir(args.tasks):
+        if os.path.isdir(args.tasks): # 지정한 task가 디렉토리에 있을 경우
             import glob
 
             task_names = []
@@ -345,21 +358,21 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
             for yaml_file in glob.glob(yaml_path):
                 config = utils.load_yaml_config(yaml_file)
                 task_names.append(config)
-        else:
-            task_list = args.tasks.split(",")
-            task_names = task_manager.match_tasks(task_list)
+        else: # 지정한 task가 디렉토리에 없을 경우
+            task_list = args.tasks.split(",") # 쉼표로 구분된 두 개 이상의 task 목록일 경우 배열로 변환
+            task_names = task_manager.match_tasks(task_list) # task_manager 객체의 match_tasks 메서드로 task 목록 일치 여부 확인
             for task in [task for task in task_list if task not in task_names]:
-                if os.path.isfile(task):
-                    config = utils.load_yaml_config(task)
-                    task_names.append(config)
+                if os.path.isfile(task): # task가 파일일 경우
+                    config = utils.load_yaml_config(task) # yaml 파일 로드 (task 설정)
+                    task_names.append(config) # task_names에 task 설정 추가
             task_missing = [
-                task for task in task_list if task not in task_names and "*" not in task
+                task for task in task_list if task not in task_names and "*" not in task # task_list에 있는 task 중 task_names에 없는 task 목록
             ]  # we don't want errors if a wildcard ("*") task name was used
 
             if task_missing:
-                missing = ", ".join(task_missing)
+                missing = ", ".join(task_missing) # task_missing 배열을 쉼표로 구분된 문자열로 변환
                 eval_logger.error(
-                    f"Tasks were not found: {missing}\n"
+                    f"Tasks were not found: {missing}\n" # 찾을 수 없는 task 출력
                     f"{utils.SPACING}Try `lm-eval --tasks list` for list of available tasks",
                 )
                 raise ValueError(
@@ -367,56 +380,57 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
                 )
 
     # Respect user's value passed in via CLI, otherwise default to True and add to comma-separated model args
-    if args.trust_remote_code:
+    if args.trust_remote_code: #원격저장소에서 모델을 다운로드하거나 데이터를 신뢰하는지 설정
         eval_logger.info(
             "Passed `--trust_remote_code`, setting environment variable `HF_DATASETS_TRUST_REMOTE_CODE=true`"
         )
         # HACK: import datasets and override its HF_DATASETS_TRUST_REMOTE_CODE value internally,
         # because it's already been determined based on the prior env var before launching our
         # script--`datasets` gets imported by lm_eval internally before these lines can update the env.
-        import datasets
+        import datasets # 데이터셋 임포트
 
-        datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True
+        datasets.config.HF_DATASETS_TRUST_REMOTE_CODE = True # HF 데이터셋 신뢰 설정
 
-        args.model_args = args.model_args + ",trust_remote_code=True"
+        args.model_args = args.model_args + ",trust_remote_code=True" # args.model_args 문자열에 trust_remote_code=True 추가
 
     eval_logger.info(f"Selected Tasks: {task_names}")
 
+    # 요청 캐싱 인자를 딕셔너리로 변환
     request_caching_args = request_caching_arg_to_dict(
-        cache_requests=args.cache_requests
+        cache_requests=args.cache_requests 
     )
 
-    results = evaluator.simple_evaluate(
-        model=args.model,
-        model_args=args.model_args,
+    results = evaluator.simple_evaluate( # 모델 평가 및 results 변수에 평가 결과를 저장
+        model=args.model, # 모델 객체
+        model_args=args.model_args, # 모델 인자
         tasks=task_names,
-        num_fewshot=args.num_fewshot,
-        batch_size=args.batch_size,
+        num_fewshot=args.num_fewshot, # few-shot 학습 샘플 수
+        batch_size=args.batch_size, 
         max_batch_size=args.max_batch_size,
         device=args.device,
         use_cache=args.use_cache,
         limit=args.limit,
-        check_integrity=args.check_integrity,
-        write_out=args.write_out,
-        log_samples=args.log_samples,
-        evaluation_tracker=evaluation_tracker,
-        system_instruction=args.system_instruction,
-        apply_chat_template=args.apply_chat_template,
-        fewshot_as_multiturn=args.fewshot_as_multiturn,
-        gen_kwargs=args.gen_kwargs,
-        task_manager=task_manager,
-        verbosity=args.verbosity,
-        predict_only=args.predict_only,
+        check_integrity=args.check_integrity, # 데이터 무결성 검사 수행할지 여부
+        write_out=args.write_out, # 평가 결과를 파일에 쓸지 여부
+        log_samples=args.log_samples, # 샘플을 로그로 남길지 여부
+        evaluation_tracker=evaluation_tracker, # 평가 과정을 추적할 객체
+        system_instruction=args.system_instruction, # 시스템 지시 사항
+        apply_chat_template=args.apply_chat_template, # 채팅 템플릿 적용 여부
+        fewshot_as_multiturn=args.fewshot_as_multiturn, # few-shot을 멀티턴 대화로 사용할지 여부
+        gen_kwargs=args.gen_kwargs, # 생성 함수에 전달한 추가 인자
+        task_manager=task_manager, # 작업을 관리할 객체
+        verbosity=args.verbosity, # 로그의 상세 수준
+        predict_only=args.predict_only, # 예측만 수행할지 여부
         random_seed=args.seed[0],
         numpy_random_seed=args.seed[1],
         torch_random_seed=args.seed[2],
         fewshot_random_seed=args.seed[3],
-        **request_caching_args,
+        **request_caching_args, # 요청 캐싱과 관련된 추가 인자
     )
 
     if results is not None:
         if args.log_samples:
-            samples = results.pop("samples")
+            samples = results.pop("samples") # 샘플 추출
         dumped = json.dumps(
             results, indent=2, default=handle_non_serializable, ensure_ascii=False
         )
@@ -462,6 +476,10 @@ def cli_evaluate(args: Union[argparse.Namespace, None] = None) -> None:
         if args.wandb_args:
             # Tear down wandb run once all the logging is done.
             wandb_logger.run.finish()
+        
+        ''' test: what is sample and results '''
+        print(f'results 출력합니다 : {results}')
+        print(f'sample 출력합니다 : {samples}')
 
 
 if __name__ == "__main__":
